@@ -1,6 +1,8 @@
 (ns riemann.plugin.samplerr-test
   (:require [clojure.test :refer :all]))
 
+(require '[riemann.plugin.samplerr :as samplerr])
+
 ; (.format (.truncatedTo (java.time.ZonedDateTime/now) java.time.temporal.ChronoUnit/DAYS) java.time.format.DateTimeFormatter/ISO_DATE_TIME)
 ; (.format (.truncatedTo (java.time.ZonedDateTime/now (java.time.ZoneId/of "UTC")) java.time.temporal.ChronoUnit/DAYS) java.time.format.DateTimeFormatter/ISO_DATE_TIME)
 
@@ -135,12 +137,8 @@
             "samplerr-2010"
             "samplerr-2009") (deprecated-aliases existing-aliases (set (allowed-aliases))))))
 
-(defn delete-aliases
-  [aliases]
-  (map (fn [a]  { :remove { :index (str "." a) :alias a } } ) aliases))
-
-(deftest delete-aliases-test
-  (is (= '({:remove { :index ".samplerr-2009" :alias "samplerr-2009" }}) (delete-aliases '("samplerr-2009")))))
+(deftest remove-aliases-test
+  (is (= '({:remove { :index ".samplerr-2009" :alias "samplerr-2009" }}) (samplerr/remove-all-aliases '("samplerr-2009")))))
 
 (defn- add-alias
   [date precision limit]
@@ -187,13 +185,12 @@
 
 (def aliases '("samplerr-2020.06.14" "samplerr-2020.04" "samplerr-2010" "logs-2020.06.14" "logs-2020.06.13"))
 
-(defn samplerr-aliases
-  "Filter aliases related to samplerr"
-  [aliases samplerr-alias-prefix]
-  (filter #(clojure.string/starts-with? % samplerr-alias-prefix) aliases))
+(defn all-aliases
+  []
+  aliases)
 
-(deftest samplerr-aliases-test
-  (is (= '("samplerr-2020.06.14" "samplerr-2020.04" "samplerr-2010") (samplerr-aliases aliases samplerr-alias-prefix))))
-
-; (delete-aliases (samplerr-aliases (all-aliases) "samplerr-"))
-; (setup-aliases ...)
+(defn refresh-samplerr-aliases
+  [elastic prefix]
+  (concat
+    (samplerr/delete-samplerr-aliases elastic prefix)
+    (add-samplerr-aliases test-date 3 2 10)))

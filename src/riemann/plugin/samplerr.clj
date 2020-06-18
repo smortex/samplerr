@@ -273,6 +273,11 @@
   [elastic prefix]
   (map name (keys (:indices (:body (es/request elastic {:url [(str prefix "*") :_stats :store] :method :get}))))))
 
+(defn list-aliases
+  "list all aliases from an elastic cluster having a given prefix"
+  [elastic prefix]
+  (filter #(clojure.string/starts-with? % prefix) (map :alias (:body (es/request elastic {:url "/_cat/aliases?format=json" :method :get})))))
+
 (defn- index-exists?
   "returns true if index exists"
   [elastic index]
@@ -484,4 +489,14 @@
   (info "registering rotation service with" (apply :interval opts) "interval")
   (let [service (apply rotation-service opts)]
     (swap! riemann.config/next-core core/conj-service service :force)))
+
+(defn remove-all-aliases
+  [aliases]
+  (into [] (map (fn [a]  { :remove { :index (str "." a) :alias a } } ) aliases)))
+
+(defn delete-samplerr-aliases
+  [elastic prefix]
+  (let [aliases (list-aliases elastic prefix)]
+    (if (first aliases)
+      (es/request elastic {:url "/_aliases" :method :post :body {:actions (remove-all-aliases aliases)}}))))
 
