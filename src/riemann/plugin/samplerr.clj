@@ -496,7 +496,97 @@
 
 (defn delete-samplerr-aliases
   [elastic prefix]
-  (let [aliases (list-aliases elastic prefix)]
-    (if (first aliases)
-      (es/request elastic {:url "/_aliases" :method :post :body {:actions (remove-all-aliases aliases)}}))))
+  (remove-all-aliases (list-aliases elastic prefix)))
 
+(defn now
+  []
+  (java.time.ZonedDateTime/now))
+
+(defn utc
+  "Return a date in UTC"
+  [date]
+  (.withZoneSameInstant date (java.time.ZoneId/of "UTC")))
+
+(defn truncate-to-day
+  "Truncate a date to the beginning of the day"
+  [date]
+  (.truncatedTo date java.time.temporal.ChronoUnit/DAYS))
+
+(defn truncate-to-month
+  "Truncate a date to the beginning of the month"
+  [date]
+  (.withDayOfMonth (truncate-to-day date) 1))
+
+(defn truncate-to-year
+  "Truncate a date to the beginning of the year"
+  [date]
+  (.withMonth (truncate-to-month date) 1))
+
+(defn daily-aliases-dates
+  [date n]
+  (map #(.minusDays (truncate-to-day (utc date)) %) (range n)))
+
+(defn monthly-aliases-dates
+  [date n]
+  (map #(.minusMonths (truncate-to-month (utc date)) %) (range n)))
+
+(defn yearly-aliases-dates
+  [date n]
+  (map #(.minusYears (truncate-to-year (utc date)) %) (range n)))
+
+(defn year-alias-names
+  [date]
+  (.format date (java.time.format.DateTimeFormatter/ofPattern "yyyy")))
+
+(defn month-alias-names
+  [date]
+  (.format date (java.time.format.DateTimeFormatter/ofPattern "yyyy.MM")))
+
+(defn day-alias-names
+  [date]
+  (.format date (java.time.format.DateTimeFormatter/ofPattern "yyyy.MM.dd")))
+
+(defn format-date
+  [date]
+  (.format date (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ssXX")))
+
+(defn- add-alias
+  [index-prefix alias-prefix date precision limit]
+  (cond (= precision :day)
+        { :add { :alias (str alias-prefix (day-alias-names date)) :index (str index-prefix (day-alias-names date)) }}
+        (= precision :month)
+        (if (.isAfter (.plusMonths date 1) limit)
+          { :add { :alias (str alias-prefix (month-alias-names date)) :index (str index-prefix (month-alias-names date)) :filter { :range { "@timestamp" { :lt (format-date (truncate-to-day limit)) } } }}}
+          { :add { :alias (str alias-prefix (month-alias-names date)) :index (str index-prefix (month-alias-names date)) }})
+        (= precision :year)
+        (if (.isAfter (.plusYears date 1) limit)
+          { :add { :alias (str alias-prefix (year-alias-names date)) :index (str index-prefix (year-alias-names date)) :filter { :range { "@timestamp" { :lt (format-date (truncate-to-month limit)) } } }}}
+          { :add { :alias (str alias-prefix (year-alias-names date)) :index (str index-prefix (year-alias-names date)) }})))
+
+(defn add-samplerr-aliases
+  [elastic index-prefix alias-prefix date keep-days keep-months keep-years]
+  (let [all-indices (set (list-indices elastic index-prefix))
+        da-dates (daily-aliases-dates date keep-days)
+        ma-dates (monthly-aliases-dates date keep-months)
+        ya-dates (yearly-aliases-dates date keep-years)
+        first-day (last da-dates)
+        first-month (last ma-dates)
+        ]
+    (concat
+      (map #(add-alias index-prefix alias-prefix % :day nil)          (filter #(some? %) (map #(if (contains? all-indices (str index-prefix (day-alias-names %)))   % nil) da-dates)))
+      (map #(add-alias index-prefix alias-prefix % :month first-day)  (filter #(some? %) (map #(if (contains? all-indices (str index-prefix (month-alias-names %))) % nil) ma-dates)))
+      (map #(add-alias index-prefix alias-prefix % :year first-month) (filter #(some? %) (map #(if (contains? all-indices (str index-prefix (year-alias-names %)))  % nil) ya-dates))))))
+
+(defn setup-aliases
+  ""
+  [elastic index-prefix alias-prefix keep-days keep-months keep-years]
+  (add-samplerr-aliases elastic index-prefix alias-prefix (now) keep-days keep-months keep-years))
+
+(defn maintain-aliases
+  ""
+  [elastic index-prefix alias-prefix keep-days keep-months keep-years]
+  (let [actions (concat (delete-samplerr-aliases elastic alias-prefix)
+                        (setup-aliases elastic index-prefix alias-prefix keep-days keep-months keep-years))
+        actions (into [] actions)]
+    (println (str "maintain-aliases: actions: " actions))
+    (es/request elastic {:url "/_aliases" :method :post :body {:actions actions}})))
